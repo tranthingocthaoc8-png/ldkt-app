@@ -1,5 +1,5 @@
 const SHEET_API_URL =
-  'https://script.google.com/macros/s/AKfycbwXSN2IzDrARnWm7rXOnFqqiKiO6xZynK4yVCtvkqHtWgI59M7bnIlrbNGhhP-McoUzIw/exec';
+  'https://script.google.com/macros/s/AKfycbyYJtP84ET_7G9Iao2TIfVNFIdC2exj0_puNYIWSIwuf_DqZ70WOAsUYPJkRyohr2t7CA/exec';
 
 export const dynamic = 'force-dynamic';
 
