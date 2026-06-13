@@ -3,57 +3,46 @@ const SHEET_API_URL =
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  try {
-    const res = await fetch(SHEET_API_URL, {
-      method: 'GET',
-      cache: 'no-store',
-      redirect: 'follow'
-    });
+async function callSheet(options = {}) {
+  const res = await fetch(SHEET_API_URL, {
+    ...options,
+    cache: 'no-store',
+    redirect: 'follow'
+  });
 
-    const text = await res.text();
+  const text = await res.text();
 
-    return new Response(text, {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store'
-      }
-    });
-  } catch (error) {
+  if (text.trim().startsWith('<')) {
     return Response.json(
-      { ok: false, error: String(error?.message || error) },
+      {
+        ok: false,
+        error: 'Apps Script trả về HTML, không phải JSON. Hãy kiểm tra quyền Web App: Execute as Me, Who has access Anyone.'
+      },
       { status: 500 }
     );
   }
+
+  return new Response(text, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store'
+    }
+  });
+}
+
+export async function GET() {
+  return callSheet({ method: 'GET' });
 }
 
 export async function POST(request) {
-  try {
-    const body = await request.text();
+  const body = await request.text();
 
-    const res = await fetch(SHEET_API_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'text/plain;charset=utf-8'
-      },
-      body,
-      redirect: 'follow'
-    });
-
-    const text = await res.text();
-
-    return new Response(text, {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store'
-      }
-    });
-  } catch (error) {
-    return Response.json(
-      { ok: false, error: String(error?.message || error) },
-      { status: 500 }
-    );
-  }
+  return callSheet({
+    method: 'POST',
+    headers: {
+      'content-type': 'text/plain;charset=utf-8'
+    },
+    body
+  });
 }
