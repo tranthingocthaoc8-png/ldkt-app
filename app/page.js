@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const SHEET_API_URL = '/api/sheet';
+const CURRENT_USER_KEY = 'ldkt_current_user_v03';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -12,41 +13,71 @@ const emptyState = {
   challenges: []
 };
 
+function norm(v) {
+  return String(v ?? '').trim();
+}
+
+function normLower(v) {
+  return norm(v).toLowerCase();
+}
+
+function normPhone(v) {
+  // Google Sheet đôi khi làm mất số 0 đầu. Chuẩn hóa để 0909123456 và 909123456 vẫn khớp.
+  return norm(v).replace(/\D/g, '').replace(/^84/, '0').replace(/^0+/, '');
+}
+
+function getField(row, keys, fallback = '') {
+  for (const key of keys) {
+    if (row && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key];
+  }
+  return fallback;
+}
+
 function normalizeUser(row) {
-  const id = String(row.ID || row.Id || row.id || '').trim();
-  const email = String(row.Email || row.email || '').trim().toLowerCase();
-  const role = String(row.Role || row.role || 'learner').trim().toLowerCase();
-  const status = String(row.Status || row.status || 'active').trim().toLowerCase();
+  const id = norm(getField(row, ['id', 'ID', 'Id', 'code', 'Code']));
+  const email = normLower(getField(row, ['email', 'Email']));
+  const role = normLower(getField(row, ['role', 'Role'], 'learner')) || 'learner';
+  const status = normLower(getField(row, ['status', 'Status'], 'active')) || 'active';
+  const phone = norm(getField(row, ['phone', 'Phone']));
+
   return {
     id,
     code: id,
-    name: String(row.Name || row.name || '').trim(),
+    name: norm(getField(row, ['name', 'Name'])),
     email,
-    phone: String(row.Phone || row.phone || '').trim(),
-    team: String(row.Team || row.team || '').trim(),
+    phone,
+    phoneKey: normPhone(phone),
+    team: norm(getField(row, ['team', 'Team'])),
     role,
-    active: status === 'active' || status === 'true' || status === 'yes',
-    createdAt: String(row.JoinDate || row.CreatedAt || row.createdAt || '')
+    active: ['active', 'true', 'yes', '1'].includes(status),
+    createdAt: norm(getField(row, ['joinDate', 'JoinDate', 'createdAt', 'CreatedAt'])),
+    currentXP: Number(getField(row, ['currentXP', 'CurrentXP', 'XP', 'xp'], 0)) || 0,
+    currentStreak: Number(getField(row, ['currentStreak', 'CurrentStreak', 'Streak', 'streak'], 0)) || 0,
+    avatar: norm(getField(row, ['avatar', 'Avatar']))
   };
 }
 
 function normalizeCheckin(row) {
-  const email = String(row.Email || row.email || '').trim().toLowerCase();
-  const completedRaw = String(row.Completed || row.completed || row.Status || row.status || '').trim().toLowerCase();
+  const email = normLower(getField(row, ['email', 'Email']));
+  const completedRaw = normLower(getField(row, ['completed', 'Completed', 'status', 'Status']));
   const status = ['true', 'yes', 'done', 'hoàn thành', 'completed', '1'].includes(completedRaw) ? 'done' : 'miss';
+  const rawDate = getField(row, ['date', 'Date']);
+  const date = rawDate ? String(rawDate).slice(0, 10) : '';
+
   return {
-    id: String(row.ID || row.Id || `${email}-${row.Date || row.Timestamp || Math.random()}`),
+    id: norm(getField(row, ['id', 'ID'], `${email}-${date}-${Math.random()}`)),
     email,
-    name: String(row.Name || ''),
-    team: String(row.Team || ''),
-    date: String(row.Date || '').slice(0, 10),
+    name: norm(getField(row, ['name', 'Name'])),
+    team: norm(getField(row, ['team', 'Team'])),
+    date,
+    day: norm(getField(row, ['day', 'Day'])),
     status,
-    mood: String(row.Mood || row.CamXuc || ''),
-    journal: String(row.Journal || row.NhatKy || ''),
-    lesson: String(row.Lesson || row.BaiHoc || ''),
-    challenge: String(row.Challenge || row.ThuThach || ''),
-    xp: Number(row.XP || row.xp || 0),
-    createdAt: String(row.Timestamp || row.CreatedAt || '')
+    mood: norm(getField(row, ['mood', 'Mood', 'CamXuc'])),
+    journal: norm(getField(row, ['journal', 'Journal', 'NhatKy'])),
+    lesson: norm(getField(row, ['lesson', 'Lesson', 'BaiHoc'])),
+    challenge: norm(getField(row, ['challenge', 'Challenge', 'ThuThach'])),
+    xp: Number(getField(row, ['xp', 'XP'], 0)) || 0,
+    createdAt: norm(getField(row, ['timestamp', 'Timestamp', 'createdAt', 'CreatedAt']))
   };
 }
 
@@ -54,22 +85,34 @@ function calcStats(user, checkins) {
   const mine = checkins
     .filter(c => c.email === user.email && c.status === 'done')
     .sort((a, b) => b.date.localeCompare(a.date));
+
   const doneDays = new Set(mine.map(c => c.date));
   let streak = 0;
   const d = new Date();
+
   for (let i = 0; i < 21; i++) {
     const key = d.toISOString().slice(0, 10);
     if (doneDays.has(key)) streak += 1;
     else break;
     d.setDate(d.getDate() - 1);
   }
-  const xp = mine.reduce((s, c) => s + (Number(c.xp) || 10), 0);
+
+  const xpFromCheckins = mine.reduce((s, c) => s + (Number(c.xp) || 0), 0);
+  const xp = Math.max(Number(user.currentXP) || 0, xpFromCheckins);
+
   const badges = [];
   if (streak >= 3) badges.push('Mầm Sen');
   if (streak >= 7) badges.push('Bền Bỉ');
   if (streak >= 14) badges.push('Khai Tâm');
   if (mine.length >= 21) badges.push('Lãnh Đạo Tỉnh Thức');
-  return { done: mine.length, streak, xp, badges, todayDone: doneDays.has(todayISO()) };
+
+  return {
+    done: mine.length,
+    streak: Math.max(streak, Number(user.currentStreak) || 0),
+    xp,
+    badges,
+    todayDone: doneDays.has(todayISO())
+  };
 }
 
 function csv(rows) {
@@ -78,10 +121,17 @@ function csv(rows) {
 
 async function apiGet() {
   const res = await fetch(SHEET_API_URL, { method: 'GET', cache: 'no-store' });
-  const json = await res.json();
+  const text = await res.text();
+
+  if (text.trim().startsWith('<')) {
+    throw new Error('API trả về HTML thay vì JSON. Kiểm tra route /api/sheet hoặc Apps Script public.');
+  }
+
+  const json = JSON.parse(text);
   if (!json.ok) throw new Error(json.error || 'Không đọc được Google Sheet.');
+
   return {
-    users: (json.users || []).map(normalizeUser).filter(u => u.id && u.email),
+    users: (json.users || []).map(normalizeUser).filter(u => u.id && (u.email || u.phone)),
     checkins: (json.checkins || []).map(normalizeCheckin).filter(c => c.email && c.date),
     challenges: json.challenges || []
   };
@@ -93,7 +143,14 @@ async function apiPost(payload) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload)
   });
-  const json = await res.json();
+
+  const text = await res.text();
+
+  if (text.trim().startsWith('<')) {
+    throw new Error('API trả về HTML thay vì JSON. Kiểm tra route /api/sheet hoặc Apps Script public.');
+  }
+
+  const json = JSON.parse(text);
   if (!json.ok) throw new Error(json.error || 'Không ghi được Google Sheet.');
   return json;
 }
@@ -104,21 +161,28 @@ export default function Home() {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [login, setLogin] = useState({ identity: '', code: '' });
   const [reg, setReg] = useState({ name: '', email: '', phone: '', team: 'Marketing' });
+  const [registeredUser, setRegisteredUser] = useState(null);
   const [checkin, setCheckin] = useState({ status: 'done', mood: 'Bình an', journal: '', lesson: '' });
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(true);
 
-  async function reload(keepScreen = true) {
+  function show(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3500);
+  }
+
+  async function reload(restoreLogin = true) {
     setLoading(true);
     try {
       const s = await apiGet();
       setData(s);
-      const savedUser = typeof window !== 'undefined' ? localStorage.getItem('ldkt_current_user') : null;
-      if (savedUser && s.users.find(u => u.id === savedUser)) {
-        setCurrentUserId(savedUser);
-        if (!keepScreen) {
-          const found = s.users.find(u => u.id === savedUser);
-          setScreen(found?.role === 'trainer' ? 'trainer' : 'home');
+
+      if (restoreLogin && typeof window !== 'undefined') {
+        const savedUser = localStorage.getItem(CURRENT_USER_KEY);
+        const found = s.users.find(u => u.id === savedUser && u.active);
+        if (found) {
+          setCurrentUserId(found.id);
+          setScreen(found.role === 'trainer' ? 'trainer' : 'home');
         }
       }
     } catch (err) {
@@ -129,24 +193,37 @@ export default function Home() {
   }
 
   useEffect(() => {
-    reload(false);
+    reload(true);
   }, []);
 
   const user = data.users.find(u => u.id === currentUserId);
-  const learners = data.users.filter(u => u.role === 'learner');
+  const learners = data.users.filter(u => u.role === 'learner' && u.active);
   const stats = user ? calcStats(user, data.checkins) : null;
-  const leaderboard = useMemo(() => learners.map(u => ({ ...u, stats: calcStats(u, data.checkins) })).sort((a, b) => b.stats.xp - a.stats.xp), [data]);
-
-  function show(msg) { setToast(msg); setTimeout(() => setToast(''), 3000); }
+  const leaderboard = useMemo(
+    () => learners.map(u => ({ ...u, stats: calcStats(u, data.checkins) })).sort((a, b) => b.stats.xp - a.stats.xp),
+    [data]
+  );
 
   async function doLogin(e) {
     e.preventDefault();
-    const id = login.identity.trim().toLowerCase();
+    const identity = login.identity.trim();
+    const identityLower = identity.toLowerCase();
+    const identityPhone = normPhone(identity);
     const code = login.code.trim().toUpperCase();
-    const found = data.users.find(u => u.active && (u.email.toLowerCase() === id || u.phone === id) && u.code.toUpperCase() === code);
+
+    const found = data.users.find(u =>
+      u.active &&
+      String(u.code || '').toUpperCase() === code &&
+      (
+        u.email === identityLower ||
+        u.phoneKey === identityPhone
+      )
+    );
+
     if (!found) return show('Không tìm thấy tài khoản hoặc mã học viên chưa đúng.');
+
     setCurrentUserId(found.id);
-    localStorage.setItem('ldkt_current_user', found.id);
+    localStorage.setItem(CURRENT_USER_KEY, found.id);
     setScreen(found.role === 'trainer' ? 'trainer' : 'home');
     show(`Chào mừng ${found.name}!`);
   }
@@ -154,15 +231,18 @@ export default function Home() {
   async function doRegister(e) {
     e.preventDefault();
     if (!reg.name || !reg.email || !reg.phone) return show('Vui lòng nhập đủ họ tên, email và số điện thoại.');
+
     try {
       setLoading(true);
       const result = await apiPost({ action: 'register', user: reg });
-      await reload(true);
       const newUser = normalizeUser(result.user);
+
+      await reload(false);
+      setRegisteredUser(newUser);
       setCurrentUserId(newUser.id);
-      localStorage.setItem('ldkt_current_user', newUser.id);
-      setScreen('home');
-      show(`Đăng ký thành công. Mã của bạn: ${newUser.code}`);
+      localStorage.setItem(CURRENT_USER_KEY, newUser.id);
+      setScreen('register-success');
+      setReg({ name: '', email: '', phone: '', team: 'Marketing' });
     } catch (err) {
       show(err.message);
     } finally {
@@ -172,10 +252,16 @@ export default function Home() {
 
   async function submitCheckin(e) {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !stats) return;
+
     const existed = data.checkins.some(c => c.email === user.email && c.date === todayISO());
-    if (existed) return show('Hôm nay bạn đã check-in rồi.');
+    if (existed || stats.todayDone) {
+      setScreen('home');
+      return show('Bạn đã check-in hôm nay rồi. Hãy quay lại vào ngày mai nhé.');
+    }
+
     const xp = checkin.status === 'done' ? 10 + (checkin.journal.trim() ? 5 : 0) : 0;
+
     try {
       setLoading(true);
       await apiPost({
@@ -185,7 +271,7 @@ export default function Home() {
           name: user.name,
           team: user.team,
           date: todayISO(),
-          day: stats ? stats.done + 1 : '',
+          day: stats.done + 1,
           completed: checkin.status === 'done' ? 'done' : 'miss',
           journal: checkin.journal,
           lesson: checkin.lesson,
@@ -194,7 +280,9 @@ export default function Home() {
           xp
         }
       });
-      await reload(true);
+
+      const s = await apiGet();
+      setData(s);
       setCheckin({ status: 'done', mood: 'Bình an', journal: '', lesson: '' });
       setScreen('home');
       show(xp ? `Check-in thành công! +${xp} XP` : 'Đã ghi nhận. Ngày mai mình bắt đầu lại nhé.');
@@ -206,9 +294,17 @@ export default function Home() {
   }
 
   function logout() {
-    localStorage.removeItem('ldkt_current_user');
+    localStorage.removeItem(CURRENT_USER_KEY);
     setCurrentUserId(null);
+    setRegisteredUser(null);
     setScreen('login');
+  }
+
+  function copyCode() {
+    const code = registeredUser?.code || registeredUser?.id || '';
+    if (!code) return;
+    navigator.clipboard?.writeText(code);
+    show('Đã sao chép mã học viên.');
   }
 
   function exportCheckins() {
@@ -219,7 +315,10 @@ export default function Home() {
     const blob = new Blob([csv(rows)], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `ldkt-checkins-${todayISO()}.csv`; a.click(); URL.revokeObjectURL(url);
+    a.href = url;
+    a.download = `ldkt-checkins-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return <main className="phone-shell">
@@ -239,7 +338,7 @@ export default function Home() {
         <button className="primary" disabled={loading}>Vào app</button>
       </form>
       <button className="link" onClick={() => setScreen('register')}>Chưa có mã? Đăng ký học viên</button>
-      <div className="demo-note">Dữ liệu đăng nhập lấy từ sheet HocVien. Ví dụ: email + mã ID như LDKT001.</div>
+      <div className="demo-note">Bạn có thể đăng nhập bằng email hoặc số điện thoại + mã học viên.</div>
     </section>}
 
     {screen === 'register' && <section className="auth-card">
@@ -254,6 +353,22 @@ export default function Home() {
       <button className="link" onClick={() => setScreen('login')}>Quay lại đăng nhập</button>
     </section>}
 
+    {screen === 'register-success' && registeredUser && <section className="auth-card">
+      <div className="hero">
+        <div className="lotus">✓</div>
+        <h1>Đăng ký thành công</h1>
+        <p>Vui lòng lưu lại mã học viên để đăng nhập cho các lần sau.</p>
+      </div>
+      <div className="card" style={{ textAlign: 'center' }}>
+        <h3>Mã học viên của bạn</h3>
+        <div style={{ fontSize: 34, fontWeight: 800, letterSpacing: 1, margin: '14px 0' }}>{registeredUser.code}</div>
+        <p className="muted">Tên: {registeredUser.name}</p>
+        <p className="muted">Email: {registeredUser.email}</p>
+        <button className="secondary" onClick={copyCode}>Sao chép mã</button>
+      </div>
+      <button className="primary" onClick={() => setScreen('home')}>Vào app</button>
+    </section>}
+
     {screen === 'home' && user && stats && <section className="page">
       <div className="hello"><div><p>Xin chào,</p><h1>{user.name}</h1></div><div className="avatar">{user.name.split(' ').map(x => x[0]).slice(-2).join('')}</div></div>
       <div className="challenge-card"><span>Ngày thử thách</span><h2>Mở rộng tầm lượng, buông dần tự ngã</h2><div className="progress"><i style={{ width: `${Math.min(100, stats.done / 21 * 100)}%` }} /></div><small>{stats.done}/21 ngày hoàn thành</small></div>
@@ -264,16 +379,17 @@ export default function Home() {
       <nav className="bottom-nav"><button onClick={() => setScreen('home')}>🏠<span>Home</span></button><button onClick={() => setScreen('checkin')}>✅<span>Check-in</span></button><button onClick={() => setScreen('leaderboard')}>🏆<span>Top</span></button></nav>
     </section>}
 
-    {screen === 'checkin' && user && <section className="page">
+    {screen === 'checkin' && user && stats && <section className="page">
       <h1 className="title">Check-in hôm nay</h1><p className="sub">{todayISO()}</p>
-      <form className="form card" onSubmit={submitCheckin}>
-        <label>Hôm nay bạn đã hoàn thành thử thách chưa?</label>
-        <div className="toggle"><button type="button" className={checkin.status === 'done' ? 'active' : ''} onClick={() => setCheckin({ ...checkin, status: 'done' })}>✅ Hoàn thành</button><button type="button" className={checkin.status === 'miss' ? 'active danger' : ''} onClick={() => setCheckin({ ...checkin, status: 'miss' })}>❌ Chưa làm</button></div>
-        <label>Cảm xúc hôm nay</label><select value={checkin.mood} onChange={e => setCheckin({ ...checkin, mood: e.target.value })}><option>Bình an</option><option>Năng lượng</option><option>Biết ơn</option><option>Khó khăn</option><option>Mệt mỏi</option></select>
-        <label>Nhật ký ngắn</label><textarea placeholder="Hôm nay bạn thực hành điều gì?" value={checkin.journal} onChange={e => setCheckin({ ...checkin, journal: e.target.value })} />
-        <label>Bài học rút ra</label><textarea placeholder="Một điều bạn nhận ra..." value={checkin.lesson} onChange={e => setCheckin({ ...checkin, lesson: e.target.value })} />
-        <button className="primary" disabled={loading}>Gửi check-in</button><button type="button" className="link" onClick={() => setScreen('home')}>Quay lại</button>
-      </form>
+      {stats.todayDone ? <Card title="Bạn đã check-in hôm nay"><p className="muted">Hãy quay lại vào ngày mai để tiếp tục giữ streak nhé.</p><button className="primary" onClick={() => setScreen('home')}>Về trang chủ</button></Card> :
+        <form className="form card" onSubmit={submitCheckin}>
+          <label>Hôm nay bạn đã hoàn thành thử thách chưa?</label>
+          <div className="toggle"><button type="button" className={checkin.status === 'done' ? 'active' : ''} onClick={() => setCheckin({ ...checkin, status: 'done' })}>✅ Hoàn thành</button><button type="button" className={checkin.status === 'miss' ? 'active danger' : ''} onClick={() => setCheckin({ ...checkin, status: 'miss' })}>❌ Chưa làm</button></div>
+          <label>Cảm xúc hôm nay</label><select value={checkin.mood} onChange={e => setCheckin({ ...checkin, mood: e.target.value })}><option>Bình an</option><option>Năng lượng</option><option>Biết ơn</option><option>Khó khăn</option><option>Mệt mỏi</option></select>
+          <label>Nhật ký ngắn</label><textarea placeholder="Hôm nay bạn thực hành điều gì?" value={checkin.journal} onChange={e => setCheckin({ ...checkin, journal: e.target.value })} />
+          <label>Bài học rút ra</label><textarea placeholder="Một điều bạn nhận ra..." value={checkin.lesson} onChange={e => setCheckin({ ...checkin, lesson: e.target.value })} />
+          <button className="primary" disabled={loading}>Gửi check-in</button><button type="button" className="link" onClick={() => setScreen('home')}>Quay lại</button>
+        </form>}
     </section>}
 
     {screen === 'leaderboard' && <section className="page"><h1 className="title">Leaderboard</h1><Card title="Top học viên"><Ranking rows={leaderboard} /></Card><button className="primary" onClick={() => setScreen('home')}>Về trang chủ</button></section>}
@@ -291,3 +407,4 @@ export default function Home() {
 
 function Card({ title, children }) { return <div className="card"><h3>{title}</h3>{children}</div>; }
 function Ranking({ rows }) { return <div className="ranking">{rows.map((r, i) => <div key={r.id} className="rank-row"><span className="rank">#{i + 1}</span><div><b>{r.name}</b><small>{r.team}</small></div><strong>{r.stats.xp} XP</strong></div>)}</div>; }
+
