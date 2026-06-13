@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwXSN2IzDrARnWm7rXOnFqqiKiO6xZynK4yVCtvkqHtWgI59M7bnIlrbNGhhP-McoUzIw/exec';
+const SHEET_API_URL = '/api/sheet';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
